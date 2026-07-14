@@ -41,9 +41,9 @@ For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID con
 - UUID: re-introduced `WatchlistEntry` into the migrated `models.py` with `film_id = db.Column(db.String(36), db.ForeignKey("film.id"))` — matching `Film.id` and the already-migrated `CollectionEntry.film_id`. I also added a `film = db.relationship("Film")` so `get_watchlist()`'s `entry.film.to_dict()` resolves, and updated the two stale docstrings that still said the ID was an integer (`services/watchlist_service.py`, `routes/watchlist/watchlist.py`). The service *logic* needed no change — `db.session.get(Film, film_id)` and `filter_by(...)` are type-agnostic and pass the value straight through. I committed this as a dedicated post-rebase fix rather than folding it into an unrelated commit.
 
 **How I verified no conflict remains:**
-- **No merge commits:** `git log --merges origin/main..feature/watchlist` returns nothing; history is linear (a plain `git rebase origin/main`, never `-i`, never a `git merge`).
-- **No stale integer references:** `grep -rniE "db.Integer.*film|film_id.*int" models.py services/watchlist_service.py routes/watchlist/` returns only an explanatory comment, no code.
-- **Functional smoke test** (in-memory SQLite): created a `Film` (confirmed `.id` is a UUID string), added it to a watchlist, and called `get_watchlist()` — the `entry.film` join resolves and returns the film, and a second add raises `AlreadyInWatchlistError`. Followed by the full `pytest tests/ -v` suite.
+- **No merge commits (confirmed):** `git log --merges origin/main..feature/watchlist` returns nothing; history is linear (a plain `git rebase origin/main`, never `-i`, never a `git merge`).
+- **No stale integer references (confirmed):** `grep -rniE "db.Integer.*film|film_id.*int" models.py services/watchlist_service.py routes/watchlist/` returns only an explanatory comment, no code.
+- **Functional check (via the test suite):** the intended verification is `pytest tests/ -v`, which exercises `add_to_watchlist()` end-to-end with a UUID `film_id`. Run this in the project virtualenv (`myenv`) after the rebase — it is the authoritative confirmation that the model re-add and UUID change hold together. (I also drafted an in-memory smoke script that creates a `Film`, adds it to a watchlist, and asserts `get_watchlist()`'s `entry.film` join resolves and a duplicate add raises `AlreadyInWatchlistError`; the git-level checks above are the ones I ran directly.)
 
 ## PR Description
 <!-- Written at the end — feature overview, design decisions, manual testing steps -->

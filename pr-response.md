@@ -1,13 +1,10 @@
 # PR Response Doc — CineLog Watchlist Feature
 
 ## AI Usage
-<<<<<<< HEAD
 I used Claude Code as a thinking partner, not an autopilot. The clearest example was the Comment 5 sort-order decision. I first had it draft a position that adopted date-added as the default *and* added an optional `?sort=title` param. Before accepting that, I asked it to switch sides — "what counterargument would a careful reviewer raise, and what tradeoff am I not acknowledging?" — and it pushed back hard: the option was really a way of dodging the maintainer's explicit "make a decision" ask, it introduced a new asymmetry with `get_collection()` (which has no sort param), the fallback branch silently swallowed invalid `sort` values, and the ordering had no tiebreaker. Weighing that critique, I decided to drop the option and commit cleanly to date-added, and had Claude rewrite the response and the code to match. So the final choice was mine; the AI's value was steelmanning the opposing view so I wasn't just rationalizing my first instinct.
 
 For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID conflict" wasn't a textual merge conflict at all — `WatchlistEntry` was silently dropped on rebase because it lived in the branch's old base and no branch commit touched `models.py` — which is why a naive `rebase --continue` produced a broken import. It also caught the earlier interactive rebase getting into a wedged state and recommended aborting and redoing it as a plain `git rebase origin/main`.
-=======
-<!-- Fill in at the end — how you used AI tools during this project -->
->>>>>>> 8e20142b6033149e7d03bad177f4f298cec9ba46
+
 
 ## Comment 1 — Rename
 **What I did:** Renamed `save_to_watchlist` → `add_to_watchlist`. To find every call site I didn't trust a single grep on the service file — I searched the whole tree with `grep -rn "save_to_watchlist" --include="*.py" .`, which surfaced the definition in `services/watchlist_service.py` plus both the import and the call in `routes/watchlist/watchlist.py`. I confirmed nothing under `tests/` referenced the old name.
@@ -36,7 +33,6 @@ For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID con
 **Engagement with reviewer's point:** The maintainer's argument — "most users want to see what they added recently" — is correct, and it's the reason I'm adopting date-added rather than merely conceding it. They framed it as date-added *vs.* alphabetical, and I agree alphabetical is the weaker default: it's a *lookup* order (useful when you already know the title and want to find it), which is a search/filter problem, not a default-sort problem. Baking a rarely-needed lookup order in as an option would add API surface and an untested code path to dodge a decision the maintainer explicitly wanted made. So the decision, documented here per their request, is: date-added, newest first, full stop. If real usage later shows demand for alphabetical, we can add an explicit, tested `?sort=` param then — driven by evidence rather than speculation.
 
 ## Comment 6 — Rebase
-<<<<<<< HEAD
 **What conflicted:** Two things, one obvious and one subtle.
 1. **`.gitignore`** — an add/add conflict: `main` and my branch both created the file. Trivial.
 2. **The UUID issue — and it was *not* a textual git conflict.** `main`'s refactor (`07ca580`) migrated `Film.id` from `Integer` to `String(36)` UUID. My branch was cut from a *pre-refactor* base where `WatchlistEntry` already lived in `models.py` with `film_id = db.Column(db.Integer, ...)`. Crucially, **no commit on my branch modifies `models.py`** (`git log origin/main..HEAD -- models.py` is empty) — the model came from the old base. So when I rebased onto the new `main`, git replayed nothing for `models.py`, and since the new `main` had removed `WatchlistEntry`, the class silently *vanished* — no conflict marker, but `from models import WatchlistEntry` would break every import. The integer/UUID mismatch was hiding inside a model that the rebase deleted outright.
@@ -46,14 +42,9 @@ For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID con
 - UUID: re-introduced `WatchlistEntry` into the migrated `models.py` with `film_id = db.Column(db.String(36), db.ForeignKey("film.id"))` — matching `Film.id` and the already-migrated `CollectionEntry.film_id`. I also added a `film = db.relationship("Film")` so `get_watchlist()`'s `entry.film.to_dict()` resolves, and updated the two stale docstrings that still said the ID was an integer (`services/watchlist_service.py`, `routes/watchlist/watchlist.py`). The service *logic* needed no change — `db.session.get(Film, film_id)` and `filter_by(...)` are type-agnostic and pass the value straight through. I committed this as a dedicated post-rebase fix rather than folding it into an unrelated commit.
 
 **How I verified no conflict remains:**
-- **No merge commits:** `git log --merges origin/main..feature/watchlist` returns nothing; history is linear (a plain `git rebase origin/main`, never `-i`, never a `git merge`).
-- **No stale integer references:** `grep -rniE "db.Integer.*film|film_id.*int" models.py services/watchlist_service.py routes/watchlist/` returns only an explanatory comment, no code.
-- **Functional smoke test** (in-memory SQLite): created a `Film` (confirmed `.id` is a UUID string), added it to a watchlist, and called `get_watchlist()` — the `entry.film` join resolves and returns the film, and a second add raises `AlreadyInWatchlistError`. Followed by the full `pytest tests/ -v` suite.
-=======
-**What conflicted:**
-**How I resolved it:**
-**How I verified no conflict remains:**
->>>>>>> 8e20142b6033149e7d03bad177f4f298cec9ba46
+- **No merge commits (confirmed):** `git log --merges origin/main..feature/watchlist` returns nothing; history is linear (a plain `git rebase origin/main`, never `-i`, never a `git merge`).
+- **No stale integer references (confirmed):** `grep -rniE "db.Integer.*film|film_id.*int" models.py services/watchlist_service.py routes/watchlist/` returns only an explanatory comment, no code.
+- **Functional check (via the test suite):** the intended verification is `pytest tests/ -v`, which exercises `add_to_watchlist()` end-to-end with a UUID `film_id`. Run this in the project virtualenv (`myenv`) after the rebase — it is the authoritative confirmation that the model re-add and UUID change hold together. (I also drafted an in-memory smoke script that creates a `Film`, adds it to a watchlist, and asserts `get_watchlist()`'s `entry.film` join resolves and a duplicate add raises `AlreadyInWatchlistError`; the git-level checks above are the ones I ran directly.)
 
 ## PR Description
 <!-- Written at the end — feature overview, design decisions, manual testing steps -->

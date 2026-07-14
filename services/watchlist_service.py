@@ -20,7 +20,11 @@ def add_to_watchlist(user_id, film_id):
 
     Args:
         user_id (str): UUID of the user.
+<<<<<<< HEAD
         film_id (str): UUID of the film.
+=======
+        film_id (int): ID of the film. (Note: integer — pre-refactor)
+>>>>>>> 8e20142b6033149e7d03bad177f4f298cec9ba46
 
     Returns:
         WatchlistEntry: The newly created entry.

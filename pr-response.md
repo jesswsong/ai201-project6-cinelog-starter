@@ -5,6 +5,7 @@ I used Claude Code as a thinking partner, not an autopilot. The clearest example
 
 For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID conflict" wasn't a textual merge conflict at all — `WatchlistEntry` was silently dropped on rebase because it lived in the branch's old base and no branch commit touched `models.py` — which is why a naive `rebase --continue` produced a broken import. It also caught the earlier interactive rebase getting into a wedged state and recommended aborting and redoing it as a plain `git rebase origin/main`.
 
+
 ## Comment 1 — Rename
 **What I did:** Renamed `save_to_watchlist` → `add_to_watchlist`. To find every call site I didn't trust a single grep on the service file — I searched the whole tree with `grep -rn "save_to_watchlist" --include="*.py" .`, which surfaced the definition in `services/watchlist_service.py` plus both the import and the call in `routes/watchlist/watchlist.py`. I confirmed nothing under `tests/` referenced the old name.
 **How I verified:** Re-ran the same grep after renaming to prove zero remaining hits, then ran the full suite (`pytest tests/ -v`) so imports resolve and no call site points at the old symbol. (Committed earlier: `refactor: update save_to_watchlist function to add_to_watchlist`.)

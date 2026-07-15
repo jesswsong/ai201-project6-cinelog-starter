@@ -1,9 +1,17 @@
 # PR Response Doc — CineLog Watchlist Feature
 
-## AI Usage
-I used Claude Code as a thinking partner, not an autopilot. The clearest example was the Comment 5 sort-order decision. I first had it draft a position that adopted date-added as the default *and* added an optional `?sort=title` param. Before accepting that, I asked it to switch sides — "what counterargument would a careful reviewer raise, and what tradeoff am I not acknowledging?" — and it pushed back hard: the option was really a way of dodging the maintainer's explicit "make a decision" ask, it introduced a new asymmetry with `get_collection()` (which has no sort param), the fallback branch silently swallowed invalid `sort` values, and the ordering had no tiebreaker. Weighing that critique, I decided to drop the option and commit cleanly to date-added, and had Claude rewrite the response and the code to match. So the final choice was mine; the AI's value was steelmanning the opposing view so I wasn't just rationalizing my first instinct.
+![alt text](image.png)
 
-For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID conflict" wasn't a textual merge conflict at all — `WatchlistEntry` was silently dropped on rebase because it lived in the branch's old base and no branch commit touched `models.py` — which is why a naive `rebase --continue` produced a broken import. It also caught the earlier interactive rebase getting into a wedged state and recommended aborting and redoing it as a plain `git rebase origin/main`.
+## AI Usage
+I used Claude Code (Anthropic's CLI) as a thinking partner while resolving the review, most substantively on **Comment 5 (sort order)**.
+
+**What I asked.** I first asked it to draft a position on the maintainer's date-added-vs-alphabetical question. Its initial output was a "have it both ways" answer: default to date-added *and* add an optional `?sort=title` query parameter for alphabetical. Rather than accept that, I deliberately asked it to argue *against* the draft — "what counterargument would a careful reviewer raise, and what tradeoff am I not acknowledging?"
+
+**What the AI returned.** On that second prompt it produced a sharp critique of its own first answer: the optional param was really a way of *dodging* the maintainer's explicit "make a decision" request; it created a new asymmetry with `get_collection()` (which exposes no sort option); the implementation silently swallowed invalid `sort` values instead of erroring; and the ordering had no tiebreaker, so same-second inserts were nondeterministic.
+
+**How my final argument differs from / builds on that.** I did not simply take either draft. I *built on* the critique by discarding the optional param entirely and committing to a single order — date-added, newest first — which is the opposite of the AI's first suggestion. But I *diverged* from the AI's framing too: its critique treated the decision as purely about avoiding indecision, whereas my final reasoning grounds it in product intent (a watchlist is a "saved for later" list where recency tracks what you're about to watch) and in cross-feature consistency with `get_collection()`. I also folded one narrow piece of the AI's critique back into the code that survived — the missing tiebreaker — by keeping `Film.title.asc()` as a secondary sort key even after dropping the param. So the AI's role was to stress-test my instinct from both sides; the decision, and the reasoning I actually stand behind, are mine.
+
+For Comment 6 the AI was also useful in diagnosis: it identified that the "UUID conflict" was not a textual merge conflict at all — `WatchlistEntry` was silently dropped on rebase because it lived in the branch's pre-refactor base and no branch commit touched `models.py` — and flagged that a naive `rebase --continue` would ship a broken import.
 
 
 ## Comment 1 — Rename
@@ -47,4 +55,74 @@ For Comment 6 the AI was most useful in diagnosis: it noticed that the "UUID con
 - **Functional check (via the test suite):** the intended verification is `pytest tests/ -v`, which exercises `add_to_watchlist()` end-to-end with a UUID `film_id`. Run this in the project virtualenv (`myenv`) after the rebase — it is the authoritative confirmation that the model re-add and UUID change hold together. (I also drafted an in-memory smoke script that creates a `Film`, adds it to a watchlist, and asserts `get_watchlist()`'s `entry.film` join resolves and a duplicate add raises `AlreadyInWatchlistError`; the git-level checks above are the ones I ran directly.)
 
 ## PR Description
-<!-- Written at the end — feature overview, design decisions, manual testing steps -->
+
+### What this feature does
+Adds a **watchlist** to CineLog — a per-user list of films a user wants to watch later, alongside the existing "collection" (films already watched). It introduces:
+- A `WatchlistEntry` model (`user_id`, `film_id` as a UUID, `date_added`, `public`) with a `film` relationship.
+- **`GET /watchlist/<user_id>`** — returns the user's watchlist as a JSON list of films, each with `date_added` and `public`, sorted newest-first.
+- **`POST /watchlist/<user_id>/add`** with body `{ "film_id": "<uuid>" }` — adds a film to the watchlist. Returns `201` with the new entry; `404` if the film doesn't exist; `409` if it's already on the watchlist (no duplicates).
+
+The service layer (`services/watchlist_service.py`) holds the logic: `add_to_watchlist()` validates the film exists and guards against duplicates (mirroring `add_to_collection()`), and `get_watchlist()` returns the sorted list.
+
+### Design decisions
+Two decisions were called out by the reviewer and made deliberately (full reasoning in Comments 4 and 5 above):
+
+1. **Default visibility → `public=True`.** New watchlist entries are public by default. CineLog is a community film-tracking app, so a public default feeds the shared/discovery experience that is the product's core value. The tradeoff (a user could expose a film without noticing) is accepted because watchlist data is low-sensitivity and the mitigation is UX (clear visibility at add-time + a per-entry private toggle), not a changed default.
+
+2. **Sort order → date-added, newest first.** `get_watchlist()` orders by `date_added` descending, with film title ascending as a stable tiebreaker. This matches user intent for a "saved for later" list (recency = what you're about to watch) and stays consistent with `get_collection()`, which already sorts this way. I chose a single order rather than adding an alphabetical option, to answer the maintainer's "make a decision" directly.
+
+### How to manually test the feature
+
+**1. Start the app** (from the project root, in the `myenv` virtualenv):
+```bash
+python app.py
+# serves on http://127.0.0.1:5000, using sqlite:///cinelog.db
+```
+
+**2. Seed a user and two films** (no HTTP endpoint creates these, so use a shell snippet in a second terminal). Copy the printed IDs:
+```bash
+python - <<'PY'
+from app import create_app, db
+from models import User, Film
+app = create_app()
+with app.app_context():
+    u = User(username="alice", email="alice@example.com")
+    f1 = Film(title="Arrival", year=2016)
+    f2 = Film(title="Blade Runner 2049", year=2017)
+    db.session.add_all([u, f1, f2]); db.session.commit()
+    print("USER_ID =", u.id)
+    print("FILM_1  =", f1.id)   # add this one first
+    print("FILM_2  =", f2.id)   # add this one second
+PY
+```
+
+**3. Add the first film** (expect `201` and `"public": true`):
+```bash
+curl -s -X POST http://127.0.0.1:5000/watchlist/<USER_ID>/add \
+  -H "Content-Type: application/json" -d '{"film_id": "<FILM_1>"}'
+```
+
+**4. Add the second film** a moment later, then **view the watchlist** (expect `201`, then a list with **Blade Runner 2049 first** — newest added — confirming the sort order):
+```bash
+curl -s -X POST http://127.0.0.1:5000/watchlist/<USER_ID>/add \
+  -H "Content-Type: application/json" -d '{"film_id": "<FILM_2>"}'
+curl -s http://127.0.0.1:5000/watchlist/<USER_ID>
+```
+
+**5. Verify deduplication** — add FILM_1 again (expect `409` with an "already on watchlist" error, and the list still shows each film once):
+```bash
+curl -s -i -X POST http://127.0.0.1:5000/watchlist/<USER_ID>/add \
+  -H "Content-Type: application/json" -d '{"film_id": "<FILM_1>"}'
+```
+
+**6. Verify the not-found path** — add a nonexistent film (expect `404`):
+```bash
+curl -s -i -X POST http://127.0.0.1:5000/watchlist/<USER_ID>/add \
+  -H "Content-Type: application/json" \
+  -d '{"film_id": "00000000-0000-0000-0000-000000000000"}'
+```
+
+**7. (Optional) Run the automated suite** for the service-level guarantees:
+```bash
+pytest tests/ -v
+```
